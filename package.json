@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "csv-parse": "^6.1.0",
+    "fs": "^0.0.1-security",
+    "mysql2": "^3.14.2",
+    "node-fetch": "^3.3.2",
+    "uuid": "^11.1.0",
+    "xlsx": "^0.18.5"
+  }
+}
