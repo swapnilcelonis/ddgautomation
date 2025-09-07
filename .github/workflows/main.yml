@@ -16,7 +16,7 @@ on:
         description: "Dataset name"
         required: true
         type: string
-        default: "random11"
+        default: "default"
       ddgdatapool:
         description: "Data Pool"
         required: true
@@ -26,7 +26,7 @@ on:
         description: "Data Model"
         required: true
         type: string
-        default: "random1"
+        default: "default"
       space:
         description: "Space"
         required: true
