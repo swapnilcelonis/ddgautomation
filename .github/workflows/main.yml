@@ -252,13 +252,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # Build the final API URL
+          FINAL_URL="$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config-file/upload"
+
+          # Redact token (show first 6 and last 4 chars)
+          if [[ -n "$TOKEN" ]]; then
+            TOKEN_LEN=${#TOKEN}
+            PREFIX=${TOKEN:0:6}
+            SUFFIX=${TOKEN: -4}
+            REDACTED="${PREFIX}...${SUFFIX}"
+          else
+            REDACTED="(empty)"
+          fi
+
+          echo "==== DEBUG INFO ===="
+          echo "Upload API URL: $FINAL_URL"
+          echo "Bearer token (redacted): $REDACTED"
+          echo "====================="
+
           REQ_LOG="curl_upload_debug.txt"
           RES_HEADERS="upload.headers"
           RES_BODY="upload.body"
 
           HTTP_CODE=$(
             curl -sS -v -X POST \
-              "$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config-file/upload" \
+              "$FINAL_URL" \
               -H "accept: application/json" \
               -H "Authorization: Bearer $TOKEN" \
               -F "file=@final.json" \
@@ -267,16 +286,16 @@ jobs:
               -w '%{http_code}' \
               2> "$REQ_LOG"
           )
+
+          # Sanitize verbose log (remove token from any Authorization line)
           sed -i -E 's/(Authorization: Bearer) [A-Za-z0-9._~-]+/\1 ***REDACTED***/Ig' "$REQ_LOG"
 
           echo "HTTP_CODE=${HTTP_CODE}"
-          head -n 30 "$RES_HEADERS" || true
-          if command -v jq >/dev/null 2>&1; then
-            (jq -r '.' "$RES_BODY" | head -c 2000) || head -c 2000 "$RES_BODY"
-          else
-            head -c 2000 "$RES_BODY"
-          fi
-          echo
+          echo "Response headers (first 20 lines):"
+          head -n 20 "$RES_HEADERS" || true
+
+          echo "Response body (first 2KB):"
+          head -c 2000 "$RES_BODY" || true
 
           jq -n --arg code "$HTTP_CODE" \
                 --slurpfile body <(head -c 5000 "$RES_BODY") \
@@ -288,6 +307,7 @@ jobs:
           fi
 
           echo "Config upload completed with HTTP ${HTTP_CODE}"
+
 
       - name: Trigger data job (API 3)
         env:
