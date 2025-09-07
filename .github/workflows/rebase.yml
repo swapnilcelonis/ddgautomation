@@ -1,0 +1,28 @@
+name: Sync main to all branches (Rebase)
+
+on:
+  push:
+    branches:
+      - main   # 👈 Auto-trigger when main gets new commits
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Needed to push changes
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0   # Fetch full history for rebasing
+
+      - name: Rebase main into all branches
+        run: |
+          git fetch origin
+          for branch in $(git branch -r | grep origin/ | grep -v 'main$'); do
+            b=${branch#origin/}
+            echo "🔄 Rebasing branch: $b"
+            git checkout $b
+            git rebase origin/main || (echo "⚠️ Conflict in $b, skipping..." && git rebase --abort)
+            git push origin $b --force-with-lease || true
+          done
