@@ -211,8 +211,14 @@ jobs:
           echo "id=$NEW_ID" >> $GITHUB_OUTPUT
           echo "::add-mask::$NEW_ID"
 
+      # after Resolve or create dataset (API #1)
+      
       - name: Run ddgjsoncreator.js → output.json
+        env:
+          NEW_ID: ${{ steps.create.outputs.id }}
         run: |
+          # (optional) confirm it's set without leaking: print first 8 chars
+          echo "Using dataset id: ${NEW_ID:0:8}********"
           node ddgjsoncreator.js \
             --name "${{ inputs.ddgname }}" \
             --dataPool "${{ inputs.ddgdatapool }}" \
@@ -224,14 +230,17 @@ jobs:
             --objectObjects objectObjects.json \
             --attributeObjects attributeObjects.json \
             --out output.json
-
+      
       - name: Run changer.js (produces final.json at root)
+        env:
+          NEW_ID: ${{ steps.create.outputs.id }}
         run: node changer.js
-
+      
       - name: Verify final.json exists
         run: |
           test -s final.json || { echo "final.json not found or empty"; ls -lah; exit 1; }
           echo "final.json size: $(wc -c < final.json) bytes"
+
 
       - name: Upload config (API #2) — verbose & safe
         id: upload
