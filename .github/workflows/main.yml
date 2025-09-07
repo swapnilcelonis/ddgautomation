@@ -412,4 +412,4 @@ jobs:
           retention-days: 7
 
       - name: Done
-        run: echo "Upload has been successful ✅ (Dataset ID: ${NEW_ID})"
+        run: echo "Upload has been successful"
