@@ -236,4 +236,4 @@ jobs:
           fi
 
       - name: Done
-        run: echo "Upload has been successful ✅ (Dataset ID: ${{ steps.create.outputs.id }})"
+        run: echo "Upload has been successful"
