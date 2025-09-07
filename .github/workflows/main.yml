@@ -69,21 +69,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate inputs
-        shell: bash
-        run: |
-          set -eu
-          DOMAIN="${{ inputs.domain }}"
-          [[ "$DOMAIN" =~ ^https?:// ]] || { echo "Domain must start with http(s)://"; exit 1; }
-          ALLOW="${{ inputs.allow_host }}"
-          if [[ -n "$ALLOW" ]]; then
-            host=$(python3 - <<'PY' import os, urllib.parse print(urllib.parse.urlparse(os.environ["DOMAIN"]).hostname or "") PY )
-            case "$host" in
-              *"$ALLOW") : ;;
-              *) echo "Domain host '$host' not allowed (must end with '$ALLOW')"; exit 1;;
-            esac
-          fi
-
       - name: Setup Node.js 22.17.0
         uses: actions/setup-node@v4
         with:
