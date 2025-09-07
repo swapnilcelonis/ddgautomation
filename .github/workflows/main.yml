@@ -232,6 +232,67 @@ jobs:
         run: |
           echo "DEBUG changer.js using dataset ID: ${NEW_ID}"
           node changer.js
+      
+      - name: Pre-check fetch existing config (API — GET)
+        id: precheck_config
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          ID:     ${{ env.NEW_ID }}   # or: ${{ steps.create.outputs.id }} if you didn't export NEW_ID
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FINAL_URL="$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config/"
+
+          # Redact token for logs (first 6 + last 4)
+          PREFIX=${TOKEN:0:6}; SUFFIX=${TOKEN: -4}; REDACTED="${PREFIX}...${SUFFIX}"
+
+          echo "==== PRE-CHECK CONFIG ===="
+          echo "GET URL (full): $FINAL_URL"
+          echo "Dataset ID (full): $ID"
+          echo "Bearer (redacted): $REDACTED"
+          echo "=========================="
+
+          RES_HEADERS="preconfig.headers"
+          RES_BODY="preconfig.body"
+
+          HTTP_CODE=$(
+            curl -sS -v -X GET \
+              "$FINAL_URL" \
+              -H "accept: application/json" \
+              -H "Authorization: Bearer $TOKEN" \
+              -D "$RES_HEADERS" \
+              --output "$RES_BODY" \
+              -w '%{http_code}' \
+              2> "preconfig.curl.log"
+          )
+
+          # Sanitize verbose log for any Authorization lines
+          sed -i -E 's/(Authorization: Bearer) [A-Za-z0-9._~-]+/\1 ***REDACTED***/Ig' preconfig.curl.log
+
+          echo "HTTP_CODE=${HTTP_CODE}"
+          echo "Response headers (first 20 lines):"
+          head -n 20 "$RES_HEADERS" || true
+
+          echo "Response body (first 2KB):"
+          head -c 2000 "$RES_BODY" || true
+          echo
+
+          # Save compact summary for artifacts
+          if command -v jq >/dev/null 2>&1; then
+            jq -n --arg code "$HTTP_CODE" \
+                  --slurpfile body <(head -c 5000 "$RES_BODY") \
+                  '{http_code:$code|tonumber, body: ($body[0]|tostring)}' > preconfig.json || true
+          else
+            printf '{"http_code":%s,"body":%s}\n' "$HTTP_CODE" "$(python3 - <<'PY'\nimport json,sys;print(json.dumps(open('preconfig.body','rb').read(5000).decode('utf-8','ignore')))\nPY\n)" > preconfig.json || true
+          fi
+
+          # Do not fail the pipeline on non-2xx — some tenants may return 404 if no config exists yet.
+          # If you want to fail on 5xx only, uncomment below:
+          # if [[ "$HTTP_CODE" -ge 500 ]]; then
+          #   echo "Server error on config GET ($HTTP_CODE)"; exit 1
+          # fi
 
 
 #api 2---------------------------------------------------
