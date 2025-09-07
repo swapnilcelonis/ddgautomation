@@ -258,3 +258,36 @@ jobs:
 
       - name: Done
         run: echo "Upload has been successful"
+
+      - name: Trigger data job (API #3)
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          ID:     ${{ steps.create.outputs.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BODY=$(jq -n --arg id "$ID" '{demoDataSetId:$id}')
+
+          RES=$(curl -sS -w '\n%{http_code}' -X POST \
+            "$DOMAIN/demo-data-generator/api/demo-data-job" \
+            -H "accept: application/json" \
+            -H "content-type: application/json" \
+            -H "Authorization: Bearer $TOKEN" \
+            --data "$BODY")
+
+          CODE="${RES##*$'\n'}"
+          BODY_ONLY="${RES%$'\n'*}"
+          echo "$BODY_ONLY" > job.json
+          echo "HTTP_CODE=$CODE"
+
+          if [[ "$CODE" -lt 200 || "$CODE" -ge 300 ]]; then
+            echo "Data job trigger failed ($CODE)"
+            head -c 2000 job.json || true
+            exit 1
+          fi
+
+          JOB_ID=$(jq -r '.id // empty' job.json || true)
+          echo "Data job triggered (Job ID: $JOB_ID)"
+
