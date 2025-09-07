@@ -233,7 +233,8 @@ jobs:
           echo "id=$NEW_ID" >> $GITHUB_OUTPUT
           echo "::add-mask::$NEW_ID"
 
-      - name: Upload config (API #2)
+      - name: Upload config (API #2) — verbose & safe
+        id: upload
         env:
           DOMAIN: ${{ inputs.domain }}
           TOKEN:  ${{ secrets.DDG_TOKEN }}
@@ -241,20 +242,72 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RES=$(curl -sS -w '\n%{http_code}' -X POST \
-            "$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config-file/upload" \
-            -H "accept: application/json" \
-            -H "Authorization: Bearer $TOKEN" \
-            -F "file=@final.json")
-          CODE="${RES##*$'\n'}"
-          BODY_ONLY="${RES%$'\n'*}"
-          echo "$BODY_ONLY" > upload.json
-          echo "HTTP_CODE=$CODE"
-          if [[ "$CODE" -lt 200 || "$CODE" -ge 300 ]]; then
-            echo "Config upload failed ($CODE)"
-            head -c 2000 upload.json || true
+
+          # Files for diagnostics (will be sanitized before printing/uploading)
+          REQ_LOG="curl_upload_debug.txt"
+          RES_HEADERS="upload.headers"
+          RES_BODY="upload.body"
+
+          # Do the upload with verbose logs redirected to a file
+          # -sS: silent but show errors
+          # -v: verbose to STDERR -> file
+          # -D: dump response headers
+          # --output: save response body (success or error) to file
+          HTTP_CODE=$(
+            curl -sS -v -X POST \
+              "$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config-file/upload" \
+              -H "accept: application/json" \
+              -H "Authorization: Bearer $TOKEN" \
+              -F "file=@final.json" \
+              -D "$RES_HEADERS" \
+              --output "$RES_BODY" \
+              -w '%{http_code}' \
+              2> "$REQ_LOG"
+          )
+
+          # Sanitize the verbose log so token never appears
+          sed -i -E 's/(Authorization: Bearer) [A-Za-z0-9._~-]+/\1 ***REDACTED***/Ig' "$REQ_LOG"
+
+          echo "HTTP_CODE=${HTTP_CODE}"
+          echo "Response headers (first 30 lines):"
+          head -n 30 "$RES_HEADERS" || true
+
+          # Save a trimmed JSON (or text) view for convenience
+          # If JSON, pretty-print a small excerpt; otherwise show first bytes
+          if command -v jq >/dev/null 2>&1; then
+            # best-effort JSON preview, may fail if not JSON
+            (jq -r '.' "$RES_BODY" | head -c 2000) || head -c 2000 "$RES_BODY"
+          else
+            head -c 2000 "$RES_BODY"
+          fi
+          echo
+
+          # Also store a compact summary JSON used by later steps / artifacts
+          jq -n --arg code "$HTTP_CODE" \
+                --slurpfile body <(head -c 5000 "$RES_BODY") \
+                '{http_code:$code|tonumber, body: ($body[0]|tostring)}' > upload.json || true
+
+          # Fail if non-2xx
+          if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
+            echo "Config upload failed (${HTTP_CODE}). See artifacts: curl_upload_debug.txt, upload.headers, upload.body"
             exit 1
           fi
+
+          echo "Config upload completed with HTTP ${HTTP_CODE}"
+     
+      - name: Publish artifacts (final.json + upload diagnostics)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ddg-upload-artifacts
+          path: |
+            final.json
+            upload.json
+            upload.headers
+            upload.body
+            curl_upload_debug.txt
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Done
         run: echo "Upload has been successful"
