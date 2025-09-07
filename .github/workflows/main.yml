@@ -165,11 +165,11 @@ jobs:
           echo "final.json size: $(wc -c < final.json) bytes"
 
       # ===== External API calls =====
-      - name: Create dataset (API #1)
+      - name: Resolve or create dataset (API #1)
         id: create
         env:
           DOMAIN:   ${{ inputs.domain }}
-          TOKEN:    ${{ secrets.DDG_TOKEN }}   # from the selected Environment
+          TOKEN:    ${{ secrets.DDG_TOKEN }}
           DDGNAME:  ${{ inputs.ddgname }}
           DATA_POOL:  ${{ inputs.ddgdatapool }}
           DATA_MODEL: ${{ inputs.ddgdatamodel }}
@@ -180,6 +180,25 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 1) Try to find an existing dataset by name
+          LIST=$(curl -sS -X GET "$DOMAIN/demo-data-generator/api/demo-data-set" \
+            -H "accept: application/json" \
+            -H "Authorization: Bearer $TOKEN")
+          echo "$LIST" > list.json || true
+
+          # Extract first matching id where .name == $DDGNAME
+          EXISTING_ID=$(jq -r --arg n "$DDGNAME" '
+            ( .[]? // [] ) | map(select(.name == $n)) | .[0].id // empty
+          ' list.json 2>/dev/null || true)
+
+          if [[ -n "$EXISTING_ID" ]]; then
+            echo "dataset already exists, updating the same (ID: $EXISTING_ID)"
+            echo "id=$EXISTING_ID" >> $GITHUB_OUTPUT
+            echo "::add-mask::$EXISTING_ID"
+            exit 0
+          fi
+
+          # 2) No match → create a new dataset
           BODY=$(jq -n \
             --arg name "$DDGNAME" \
             --arg dp "$DATA_POOL" \
@@ -205,12 +224,14 @@ jobs:
             exit 1
           fi
 
-          ID=$(jq -r '.id // empty' create.json)
-          if [[ -z "$ID" ]]; then
+          NEW_ID=$(jq -r '.id // empty' create.json)
+          if [[ -z "$NEW_ID" ]]; then
             echo "Missing id in response"; head -c 1000 create.json; exit 1
           fi
-          echo "id=$ID" >> $GITHUB_OUTPUT
-          echo "::add-mask::$ID"
+
+          echo "New dataset created (ID: $NEW_ID)"
+          echo "id=$NEW_ID" >> $GITHUB_OUTPUT
+          echo "::add-mask::$NEW_ID"
 
       - name: Upload config (API #2)
         env:
