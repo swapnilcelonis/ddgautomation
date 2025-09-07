@@ -185,6 +185,13 @@ for (const at of ocpmAttributes) {
   }
 }
 
+// ---------- UUID generator with regex validation ----------
+const newId = process.env.NEW_ID;
+if (!newId) {
+  console.error("Error: Environment variable NEW_ID must be set.");
+  process.exit(1);
+}
+
 // ---------- Variants ----------
 const variantsNormalized = normalizeVariants(variants);
 
@@ -192,7 +199,7 @@ const variantsNormalized = normalizeVariants(variants);
 const output = {
   lastStepSaved: "ocpmRelations",
   dataSetConfig: {
-    id: randomUUID(),
+    id: newId,
     name,
     ddgType: "OBJECT_CENTRIC",
     dataPool,
