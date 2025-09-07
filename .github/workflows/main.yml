@@ -212,51 +212,30 @@ jobs:
 
       # after Resolve or create dataset (API #1)
       
-      - name: Run ddgjsoncreator.js → output.json
-        run: |
-          echo "DEBUG URL: ${DOMAIN}/demo-data-generator/api/demo-data-set"
-          echo "DEBUG Dataset ID: ${NEW_ID}"
-          node ddgjsoncreator.js \
-            --name "${{ inputs.ddgname }}" \
-            --dataPool "${{ inputs.ddgdatapool }}" \
-            --dataModel "${{ inputs.ddgdatamodel }}" \
-            --entities entities.json \
-            --variants variants.json \
-            --caseTable caseTable.json \
-            --eventObjects eventObjects.json \
-            --objectObjects objectObjects.json \
-            --attributeObjects attributeObjects.json \
-            --out output.json
-      
-      - name: Run changer.js (produces final.json at root)
-        run: |
-          echo "DEBUG changer.js using dataset ID: ${NEW_ID}"
-          node changer.js
-      
       - name: Pre-check fetch existing config (API — GET)
         id: precheck_config
         env:
           DOMAIN: ${{ inputs.domain }}
           TOKEN:  ${{ secrets.DDG_TOKEN }}
-          ID:     ${{ env.NEW_ID }}   # or: ${{ steps.create.outputs.id }} if you didn't export NEW_ID
+          ID:     ${{ env.NEW_ID }}   # or: ${{ steps.create.outputs.id }}
         shell: bash
         run: |
           set -euo pipefail
-
+      
           FINAL_URL="$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config/"
-
+      
           # Redact token for logs (first 6 + last 4)
           PREFIX=${TOKEN:0:6}; SUFFIX=${TOKEN: -4}; REDACTED="${PREFIX}...${SUFFIX}"
-
+      
           echo "==== PRE-CHECK CONFIG ===="
           echo "GET URL (full): $FINAL_URL"
           echo "Dataset ID (full): $ID"
           echo "Bearer (redacted): $REDACTED"
           echo "=========================="
-
+      
           RES_HEADERS="preconfig.headers"
           RES_BODY="preconfig.body"
-
+      
           HTTP_CODE=$(
             curl -sS -v -X GET \
               "$FINAL_URL" \
@@ -267,32 +246,46 @@ jobs:
               -w '%{http_code}' \
               2> "preconfig.curl.log"
           )
-
+      
           # Sanitize verbose log for any Authorization lines
           sed -i -E 's/(Authorization: Bearer) [A-Za-z0-9._~-]+/\1 ***REDACTED***/Ig' preconfig.curl.log
-
+      
           echo "HTTP_CODE=${HTTP_CODE}"
           echo "Response headers (first 20 lines):"
           head -n 20 "$RES_HEADERS" || true
-
+      
           echo "Response body (first 2KB):"
           head -c 2000 "$RES_BODY" || true
           echo
-
-          # Save compact summary for artifacts
+      
+          # --- Create compact summary JSON without Python ---
+          SNIP="preconfig.body.snip"
+          head -c 5000 "$RES_BODY" > "$SNIP" || true
+      
           if command -v jq >/dev/null 2>&1; then
-            jq -n --arg code "$HTTP_CODE" \
-                  --slurpfile body <(head -c 5000 "$RES_BODY") \
-                  '{http_code:$code|tonumber, body: ($body[0]|tostring)}' > preconfig.json || true
+            # Use jq to JSON-encode the raw snippet safely
+            jq -n \
+              --argjson code "$(printf '%s' "$HTTP_CODE")" \
+              --rawfile body "$SNIP" \
+              '{http_code: $code, body: $body}' > preconfig.json || true
           else
-            printf '{"http_code":%s,"body":%s}\n' "$HTTP_CODE" "$(python3 - <<'PY'\nimport json,sys;print(json.dumps(open('preconfig.body','rb').read(5000).decode('utf-8','ignore')))\nPY\n)" > preconfig.json || true
+            # Fallback: base64-encode the snippet so quoting is safe
+            if command -v base64 >/dev/null 2>&1; then
+              B64=$(base64 -w0 "$SNIP" 2>/dev/null || base64 "$SNIP")
+              printf '{"http_code":%s,"body_b64":"%s"}\n' "$HTTP_CODE" "$B64" > preconfig.json || true
+            else
+              # Last resort: write minimal JSON with size only
+              SIZE=$(wc -c < "$SNIP" || echo 0)
+              printf '{"http_code":%s,"body_preview_bytes":%s}\n' "$HTTP_CODE" "$SIZE" > preconfig.json || true
+            fi
           fi
-
-          # Do not fail the pipeline on non-2xx — some tenants may return 404 if no config exists yet.
-          # If you want to fail on 5xx only, uncomment below:
+      
+          # Do not fail on non-2xx here; a 404 may simply mean "no config yet".
+          # Uncomment to fail only on 5xx:
           # if [[ "$HTTP_CODE" -ge 500 ]]; then
           #   echo "Server error on config GET ($HTTP_CODE)"; exit 1
           # fi
+      
 
 
 #api 2---------------------------------------------------
