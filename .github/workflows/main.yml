@@ -11,7 +11,7 @@ on:
         description: "DDG domain incl. protocol (e.g., https://ddg-practice.try.celonis.cloud)"
         required: true
         type: string
-        default:: "https://ddg-practice.try.celonis.cloud"
+        default: "https://ddg-practice.try.celonis.cloud"
       ddgname:
         description: "Dataset name"
         required: true
