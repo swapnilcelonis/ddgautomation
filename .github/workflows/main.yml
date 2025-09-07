@@ -1,0 +1,239 @@
+name: DDG Uploader (Google Sheets → input.xlsx)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment that holds YOUR DDG_TOKEN (e.g., env-swapnil)"
+        required: true
+        type: string
+      domain:
+        description: "DDG domain incl. protocol (e.g., https://ddg-practice.try.celonis.cloud)"
+        required: true
+        type: string
+      ddgname:
+        description: "Dataset name"
+        required: true
+        type: string
+        default: "random11"
+      ddgdatapool:
+        description: "Data Pool"
+        required: true
+        type: string
+        default: "ddgtest"
+      ddgdatamodel:
+        description: "Data Model"
+        required: true
+        type: string
+        default: "random1"
+      space:
+        description: "Space"
+        required: true
+        type: string
+        default: "defaultSpace"
+      genpackage:
+        description: "Gen Package"
+        required: true
+        type: string
+        default: "defaultPackage"
+      analysis:
+        description: "Analysis"
+        required: true
+        type: string
+        default: "defaultAnalysis"
+      google_sheets_link:
+        description: >
+          Public Google Sheets link (make sure sharing is 'Anyone with the link').
+          Example: https://docs.google.com/spreadsheets/d/<FILE_ID>/edit#gid=0
+        required: true
+        type: string
+      allow_host:
+        description: "Safety: only allow API domain hosts ending with this suffix"
+        required: false
+        type: string
+        default: ".celonis.cloud"
+
+permissions:
+  contents: read
+
+jobs:
+  ddg:
+    # bind to the chosen environment so this job sees ONLY that env's secrets
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ddg-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs & mask
+        shell: bash
+        run: |
+          set -eu
+
+          DOMAIN="${{ inputs.domain }}"
+          [[ "$DOMAIN" =~ ^https?:// ]] || { echo "Domain must start with http(s)://"; exit 1; }
+
+  
+          # Mask a few values in logs
+          echo "::add-mask::${{ inputs.domain }}"
+          echo "::add-mask::${{ inputs.ddgname }}"
+          echo "::add-mask::${{ inputs.ddgdatapool }}"
+          echo "::add-mask::${{ inputs.ddgdatamodel }}"
+
+      - name: Setup Node.js 22.17.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.17.0'
+          cache: 'npm'
+
+      - name: npm install
+        run: npm install
+
+      - name: Download Google Sheet as input.xlsx (root)
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${{ inputs.google_sheets_link }}"
+          if [[ -z "$raw" ]]; then
+            echo "No Google Sheet link provided"; exit 1
+          fi
+
+          # Normalize to a direct XLSX export URL if it's a standard Sheets link
+          norm_url () {
+            local url="$1"
+            if [[ "$url" =~ ^https://docs\.google\.com/spreadsheets/d/([^/]+) ]]; then
+              local id="${BASH_REMATCH[1]}"
+              echo "https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx"
+            else
+              # If caller already supplied a direct XLSX URL, pass through
+              echo "$url"
+            fi
+          }
+
+          url="$(norm_url "$raw")"
+          echo "Downloading $url -> input.xlsx"
+          curl -fsSL "$url" -o input.xlsx
+
+          # Basic sanity checks (non-empty + XLSX zip magic)
+          test -s input.xlsx || { echo "input.xlsx is empty"; exit 1; }
+          head -c 4 input.xlsx | od -An -t x1
+          ls -lh input.xlsx
+
+      # ===== Your JS sequence (1 → 9) =====
+      - name: Run entities.js
+        run: node entities.js
+
+      - name: Run variants.js
+        run: node variants.js
+
+      - name: Run caseTable.js
+        run: node caseTable.js
+
+      - name: Run eventObjects.js
+        run: node eventObjects.js
+
+      - name: Run objectObjects.js
+        run: node objectObjects.js
+
+      - name: Run attributeObjects.js
+        run: node attributeObjects.js
+
+      - name: Run ddgjsoncreator.js → output.json
+        run: |
+          node ddgjsoncreator.js \
+            --name "${{ inputs.ddgname }}" \
+            --dataPool "${{ inputs.ddgdatapool }}" \
+            --dataModel "${{ inputs.ddgdatamodel }}" \
+            --entities entities.json \
+            --variants variants.json \
+            --caseTable caseTable.json \
+            --eventObjects eventObjects.json \
+            --objectObjects objectObjects.json \
+            --attributeObjects attributeObjects.json \
+            --out output.json
+
+      - name: Run changer.js (produces final.json at root)
+        run: node changer.js
+
+      - name: Verify final.json exists
+        run: |
+          test -s final.json || { echo "final.json not found or empty"; ls -lah; exit 1; }
+          echo "final.json size: $(wc -c < final.json) bytes"
+
+      # ===== External API calls =====
+      - name: Create dataset (API #1)
+        id: create
+        env:
+          DOMAIN:   ${{ inputs.domain }}
+          TOKEN:    ${{ secrets.DDG_TOKEN }}   # from the selected Environment
+          DDGNAME:  ${{ inputs.ddgname }}
+          DATA_POOL:  ${{ inputs.ddgdatapool }}
+          DATA_MODEL: ${{ inputs.ddgdatamodel }}
+          SPACE:      ${{ inputs.space }}
+          GENPACKAGE: ${{ inputs.genpackage }}
+          ANALYSIS:   ${{ inputs.analysis }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BODY=$(jq -n \
+            --arg name "$DDGNAME" \
+            --arg dp "$DATA_POOL" \
+            --arg dm "$DATA_MODEL" \
+            --arg sp "$SPACE" \
+            --arg gp "$GENPACKAGE" \
+            --arg an "$ANALYSIS" \
+            '{name:$name, ddgType:"OBJECT_CENTRIC", params:{dataPool:$dp, dataModel:$dm, space:$sp, genpackage:$gp, analysis:$an}}')
+
+          RES=$(curl -sS -w '\n%{http_code}' -X POST "$DOMAIN/demo-data-generator/api/demo-data-set" \
+            -H "accept: application/json" \
+            -H "content-type: application/json" \
+            -H "Authorization: Bearer $TOKEN" \
+            --data "$BODY")
+
+          CODE="${RES##*$'\n'}"
+          BODY_ONLY="${RES%$'\n'*}"
+          echo "$BODY_ONLY" > create.json
+          echo "HTTP_CODE=$CODE"
+          if [[ "$CODE" -lt 200 || "$CODE" -ge 300 ]]; then
+            echo "Create dataset failed ($CODE)"
+            head -c 2000 create.json || true
+            exit 1
+          fi
+
+          ID=$(jq -r '.id // empty' create.json)
+          if [[ -z "$ID" ]]; then
+            echo "Missing id in response"; head -c 1000 create.json; exit 1
+          fi
+          echo "id=$ID" >> $GITHUB_OUTPUT
+          echo "::add-mask::$ID"
+
+      - name: Upload config (API #2)
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          ID:     ${{ steps.create.outputs.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RES=$(curl -sS -w '\n%{http_code}' -X POST \
+            "$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config-file/upload" \
+            -H "accept: application/json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -F "file=@final.json")
+          CODE="${RES##*$'\n'}"
+          BODY_ONLY="${RES%$'\n'*}"
+          echo "$BODY_ONLY" > upload.json
+          echo "HTTP_CODE=$CODE"
+          if [[ "$CODE" -lt 200 || "$CODE" -ge 300 ]]; then
+            echo "Config upload failed ($CODE)"
+            head -c 2000 upload.json || true
+            exit 1
+          fi
+
+      - name: Done
+        run: echo "Upload has been successful ✅ (Dataset ID: ${{ steps.create.outputs.id }})"
