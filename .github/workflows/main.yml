@@ -222,7 +222,7 @@ jobs:
           echo "final.json size: $(wc -c < final.json) bytes"
 
       # === Pre-check: fetch existing config (GET) ===
-      - name: Pre-check: fetch existing config (API — GET)
+      - name: Pre-check fetch existing config (API — GET)
         id: precheck_config
         env:
           DOMAIN: ${{ inputs.domain }}
