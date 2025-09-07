@@ -266,9 +266,16 @@ jobs:
             REDACTED="(empty)"
           fi
 
+          PREFIX=${TOKEN:0:6}
+          SUFFIX=${TOKEN: -4}
+          REDACTED="${PREFIX}...${SUFFIX}"
+
           echo "==== DEBUG INFO ===="
-          echo "Upload API URL: $FINAL_URL"
+          echo "::remove-matcher owner=secret::"
+          echo "Upload API URL (full): $FINAL_URL"
+          echo "Dataset ID (redacted): ${ID:0:8}...${ID: -4}"
           echo "Bearer token (redacted): $REDACTED"
+          echo "::add-matcher::{}"
           echo "====================="
 
           REQ_LOG="curl_upload_debug.txt"
