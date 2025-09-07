@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Environment that holds YOUR DDG_TOKEN (e.g., env-swapnil)"
+        description: "Environment containing YOUR DDG_TOKEN (e.g., env-swapnil)"
         required: true
         type: string
       domain:
         description: "DDG domain incl. protocol (e.g., https://ddg-practice.try.celonis.cloud)"
         required: true
         type: string
-        default: "https://ddg-practice.try.celonis.cloud"
+        default:: "https://ddg-practice.try.celonis.cloud"
       ddgname:
         description: "Dataset name"
         required: true
@@ -44,8 +44,8 @@ on:
         default: "defaultAnalysis"
       google_sheets_link:
         description: >
-          Public Google Sheets link (make sure sharing is 'Anyone with the link').
-          Example: https://docs.google.com/spreadsheets/d/<FILE_ID>/edit#gid=0
+          Public Google Sheets link (set sharing to 'Anyone with the link').
+          e.g. https://docs.google.com/spreadsheets/d/<FILE_ID>/edit#gid=0
         required: true
         type: string
       allow_host:
@@ -59,8 +59,7 @@ permissions:
 
 jobs:
   ddg:
-    # bind to the chosen environment so this job sees ONLY that env's secrets
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment }}  # exposes secrets.DDG_TOKEN from that environment
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -70,20 +69,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate inputs & mask
+      - name: Validate inputs
         shell: bash
         run: |
           set -eu
-
           DOMAIN="${{ inputs.domain }}"
           [[ "$DOMAIN" =~ ^https?:// ]] || { echo "Domain must start with http(s)://"; exit 1; }
-
-  
-          # Mask a few values in logs
-          echo "::add-mask::${{ inputs.domain }}"
-          echo "::add-mask::${{ inputs.ddgname }}"
-          echo "::add-mask::${{ inputs.ddgdatapool }}"
-          echo "::add-mask::${{ inputs.ddgdatamodel }}"
+          ALLOW="${{ inputs.allow_host }}"
+          if [[ -n "$ALLOW" ]]; then
+            host=$(python3 - <<'PY'
+import os, urllib.parse
+print(urllib.parse.urlparse(os.environ["DOMAIN"]).hostname or "")
+PY
+)
+            case "$host" in
+              *"$ALLOW") : ;;
+              *) echo "Domain host '$host' not allowed (must end with '$ALLOW')"; exit 1;;
+            esac
+          fi
 
       - name: Setup Node.js 22.17.0
         uses: actions/setup-node@v4
@@ -101,48 +104,37 @@ jobs:
           if [[ -z "$raw" ]]; then
             echo "No Google Sheet link provided"; exit 1
           fi
-
-          # Normalize to a direct XLSX export URL if it's a standard Sheets link
           norm_url () {
             local url="$1"
             if [[ "$url" =~ ^https://docs\.google\.com/spreadsheets/d/([^/]+) ]]; then
               local id="${BASH_REMATCH[1]}"
               echo "https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx"
             else
-              # If caller already supplied a direct XLSX URL, pass through
               echo "$url"
             fi
           }
-
           url="$(norm_url "$raw")"
           echo "Downloading $url -> input.xlsx"
           curl -fsSL "$url" -o input.xlsx
-
-          # Basic sanity checks (non-empty + XLSX zip magic)
           test -s input.xlsx || { echo "input.xlsx is empty"; exit 1; }
           head -c 4 input.xlsx | od -An -t x1
           ls -lh input.xlsx
 
-      # ===== Your JS sequence (1 → 9) =====
+      # === Your JS steps 1–6 ===
       - name: Run entities.js
         run: node entities.js
-
       - name: Run variants.js
         run: node variants.js
-
       - name: Run caseTable.js
         run: node caseTable.js
-
       - name: Run eventObjects.js
         run: node eventObjects.js
-
       - name: Run objectObjects.js
         run: node objectObjects.js
-
       - name: Run attributeObjects.js
         run: node attributeObjects.js
 
-      # ===== External API calls =====
+      # === Resolve or create dataset (API #1) and export NEW_ID ===
       - name: Resolve or create dataset (API #1)
         id: create
         env:
@@ -157,24 +149,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-      
-          # GET list → find by name
+
+          # 1) GET list → find by name
           LIST=$(curl -sS -X GET "$DOMAIN/demo-data-generator/api/demo-data-set" \
             -H "accept: application/json" \
             -H "Authorization: Bearer $TOKEN")
           echo "$LIST" > list.json || true
-      
+
           EXISTING_ID=$(jq -r --arg n "$DDGNAME" '( .[]? // [] ) | map(select(.name == $n)) | .[0].id // empty' list.json 2>/dev/null || true)
-      
+
           if [[ -n "$EXISTING_ID" ]]; then
             echo "dataset already exists, updating the same (ID: $EXISTING_ID)"
             echo "id=$EXISTING_ID" >> $GITHUB_OUTPUT
-            echo "NEW_ID=$EXISTING_ID" >> $GITHUB_ENV      # <-- export for later steps
-            # DO NOT mask the ID (no ::add-mask:: here)
+            echo "NEW_ID=$EXISTING_ID" >> $GITHUB_ENV
             exit 0
           fi
-      
-          # POST create
+
+          # 2) POST create
           BODY=$(jq -n \
             --arg name "$DDGNAME" \
             --arg dp "$DATA_POOL" \
@@ -183,13 +174,13 @@ jobs:
             --arg gp "$GENPACKAGE" \
             --arg an "$ANALYSIS" \
             '{name:$name, ddgType:"OBJECT_CENTRIC", params:{dataPool:$dp, dataModel:$dm, space:$sp, genpackage:$gp, analysis:$an}}')
-      
+
           RES=$(curl -sS -w '\n%{http_code}' -X POST "$DOMAIN/demo-data-generator/api/demo-data-set" \
             -H "accept: application/json" \
             -H "content-type: application/json" \
             -H "Authorization: Bearer $TOKEN" \
             --data "$BODY")
-      
+
           CODE="${RES##*$'\n'}"
           BODY_ONLY="${RES%$'\n'*}"
           echo "$BODY_ONLY" > create.json
@@ -198,44 +189,64 @@ jobs:
             head -c 2000 create.json || true
             exit 1
           fi
-      
+
           NEW=$(jq -r '.id // empty' create.json)
           if [[ -z "$NEW" ]]; then
             echo "Missing id in response"; head -c 1000 create.json; exit 1
           fi
-      
+
           echo "New dataset created (ID: $NEW)"
           echo "id=$NEW" >> $GITHUB_OUTPUT
-          echo "NEW_ID=$NEW" >> $GITHUB_ENV                # <-- export for later steps
-          # DO NOT mask the ID
+          echo "NEW_ID=$NEW" >> $GITHUB_ENV
 
+      # === Run these 3 steps AFTER resolve/create ===
+      - name: Run ddgjsoncreator.js → output.json
+        run: |
+          echo "DEBUG Dataset ID for scripts: ${NEW_ID}"
+          node ddgjsoncreator.js \
+            --name "${{ inputs.ddgname }}" \
+            --dataPool "${{ inputs.ddgdatapool }}" \
+            --dataModel "${{ inputs.ddgdatamodel }}" \
+            --entities entities.json \
+            --variants variants.json \
+            --caseTable caseTable.json \
+            --eventObjects eventObjects.json \
+            --objectObjects objectObjects.json \
+            --attributeObjects attributeObjects.json \
+            --out output.json
 
-      # after Resolve or create dataset (API #1)
-      
-      - name: Pre-check fetch existing config (API — GET)
+      - name: Run changer.js (produces final.json at root)
+        run: |
+          echo "DEBUG changer.js using dataset ID: ${NEW_ID}"
+          node changer.js
+
+      - name: Verify final.json exists
+        run: |
+          test -s final.json || { echo "final.json not found or empty"; ls -lah; exit 1; }
+          echo "final.json size: $(wc -c < final.json) bytes"
+
+      # === Pre-check: fetch existing config (GET) ===
+      - name: Pre-check: fetch existing config (API — GET)
         id: precheck_config
         env:
           DOMAIN: ${{ inputs.domain }}
           TOKEN:  ${{ secrets.DDG_TOKEN }}
-          ID:     ${{ env.NEW_ID }}   # or: ${{ steps.create.outputs.id }}
+          ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
           set -euo pipefail
-      
           FINAL_URL="$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config/"
-      
-          # Redact token for logs (first 6 + last 4)
           PREFIX=${TOKEN:0:6}; SUFFIX=${TOKEN: -4}; REDACTED="${PREFIX}...${SUFFIX}"
-      
+
           echo "==== PRE-CHECK CONFIG ===="
           echo "GET URL (full): $FINAL_URL"
           echo "Dataset ID (full): $ID"
           echo "Bearer (redacted): $REDACTED"
           echo "=========================="
-      
+
           RES_HEADERS="preconfig.headers"
           RES_BODY="preconfig.body"
-      
+
           HTTP_CODE=$(
             curl -sS -v -X GET \
               "$FINAL_URL" \
@@ -246,74 +257,60 @@ jobs:
               -w '%{http_code}' \
               2> "preconfig.curl.log"
           )
-      
-          # Sanitize verbose log for any Authorization lines
+
           sed -i -E 's/(Authorization: Bearer) [A-Za-z0-9._~-]+/\1 ***REDACTED***/Ig' preconfig.curl.log
-      
+
           echo "HTTP_CODE=${HTTP_CODE}"
           echo "Response headers (first 20 lines):"
           head -n 20 "$RES_HEADERS" || true
-      
+
           echo "Response body (first 2KB):"
           head -c 2000 "$RES_BODY" || true
           echo
-      
-          # --- Create compact summary JSON without Python ---
+
           SNIP="preconfig.body.snip"
           head -c 5000 "$RES_BODY" > "$SNIP" || true
-      
+
           if command -v jq >/dev/null 2>&1; then
-            # Use jq to JSON-encode the raw snippet safely
             jq -n \
               --argjson code "$(printf '%s' "$HTTP_CODE")" \
               --rawfile body "$SNIP" \
               '{http_code: $code, body: $body}' > preconfig.json || true
           else
-            # Fallback: base64-encode the snippet so quoting is safe
             if command -v base64 >/dev/null 2>&1; then
               B64=$(base64 -w0 "$SNIP" 2>/dev/null || base64 "$SNIP")
               printf '{"http_code":%s,"body_b64":"%s"}\n' "$HTTP_CODE" "$B64" > preconfig.json || true
             else
-              # Last resort: write minimal JSON with size only
               SIZE=$(wc -c < "$SNIP" || echo 0)
               printf '{"http_code":%s,"body_preview_bytes":%s}\n' "$HTTP_CODE" "$SIZE" > preconfig.json || true
             fi
           fi
-      
-          # Do not fail on non-2xx here; a 404 may simply mean "no config yet".
-          # Uncomment to fail only on 5xx:
-          # if [[ "$HTTP_CODE" -ge 500 ]]; then
-          #   echo "Server error on config GET ($HTTP_CODE)"; exit 1
-          # fi
-      
+          # Do not fail on non-2xx; a 404 may mean "no config yet".
 
-
-#api 2---------------------------------------------------
-      - name: Upload config (API 2) — verbose & safe
+      # === Upload config (API #2) with full URL & ID (token redacted) ===
+      - name: Upload config (API #2) — verbose & safe
         id: upload
         env:
           DOMAIN: ${{ inputs.domain }}
           TOKEN:  ${{ secrets.DDG_TOKEN }}
-          ID:     ${{ env.NEW_ID }}               # <-- from job env
+          ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
           set -euo pipefail
-      
+
           FINAL_URL="$DOMAIN/demo-data-generator/api/demo-data-set/${ID}/config-file/upload"
-      
-          # Redact token only (bearer tokens are secrets)
           PREFIX=${TOKEN:0:6}; SUFFIX=${TOKEN: -4}; REDACTED="${PREFIX}...${SUFFIX}"
-      
-          echo "==== DEBUG INFO ===="
+
+          echo "==== DEBUG INFO (UPLOAD) ===="
           echo "Upload API URL (full): $FINAL_URL"
           echo "Dataset ID (full): $ID"
           echo "Bearer token (redacted): $REDACTED"
-          echo "====================="
-      
+          echo "============================="
+
           REQ_LOG="curl_upload_debug.txt"
           RES_HEADERS="upload.headers"
           RES_BODY="upload.body"
-      
+
           HTTP_CODE=$(
             curl -sS -v -X POST \
               "$FINAL_URL" \
@@ -325,42 +322,54 @@ jobs:
               -w '%{http_code}' \
               2> "$REQ_LOG"
           )
+
           sed -i -E 's/(Authorization: Bearer) [A-Za-z0-9._~-]+/\1 ***REDACTED***/Ig' "$REQ_LOG"
-      
+
           echo "HTTP_CODE=${HTTP_CODE}"
           echo "Response headers (first 20 lines):"
           head -n 20 "$RES_HEADERS" || true
+
           echo "Response body (first 2KB):"
           head -c 2000 "$RES_BODY" || true
-      
+
           jq -n --arg code "$HTTP_CODE" \
                 --slurpfile body <(head -c 5000 "$RES_BODY") \
                 '{http_code:$code|tonumber, body: ($body[0]|tostring)}' > upload.json || true
-      
+
           if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
             echo "Config upload failed (${HTTP_CODE}). See artifacts."
             exit 1
           fi
-      
-          echo "Config upload completed with HTTP ${HTTP_CODE}"
-      
-      
 
-      - name: Trigger data job (API 3)
+          echo "Config upload completed with HTTP ${HTTP_CODE}"
+
+      # === Trigger data job (API #3) ===
+      - name: Trigger data job (API #3)
         env:
           DOMAIN: ${{ inputs.domain }}
           TOKEN:  ${{ secrets.DDG_TOKEN }}
-          ID:     ${{ steps.create.outputs.id }}
+          ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
           set -euo pipefail
+          FINAL_URL="$DOMAIN/demo-data-generator/api/demo-data-job"
+          PREFIX=${TOKEN:0:6}; SUFFIX=${TOKEN: -4}; REDACTED="${PREFIX}...${SUFFIX}"
+
+          echo "==== DEBUG INFO (JOB) ===="
+          echo "POST URL (full): $FINAL_URL"
+          echo "Dataset ID (full): $ID"
+          echo "Bearer (redacted): $REDACTED"
+          echo "========================="
+
           BODY=$(jq -n --arg id "$ID" '{demoDataSetId:$id}')
+
           RES=$(curl -sS -w '\n%{http_code}' -X POST \
-            "$DOMAIN/demo-data-generator/api/demo-data-job" \
+            "$FINAL_URL" \
             -H "accept: application/json" \
             -H "content-type: application/json" \
             -H "Authorization: Bearer $TOKEN" \
             --data "$BODY")
+
           CODE="${RES##*$'\n'}"
           BODY_ONLY="${RES%$'\n'*}"
           echo "$BODY_ONLY" > job.json
@@ -373,21 +382,38 @@ jobs:
           JOB_ID=$(jq -r '.id // empty' job.json || true)
           echo "Data job triggered (Job ID: $JOB_ID)"
 
-      - name: Publish artifacts (final.json + upload diagnostics)
+      - name: Write debug info
+        if: always()
+        run: |
+          {
+            echo "Final upload URL: ${DOMAIN}/demo-data-generator/api/demo-data-set/${NEW_ID}/config-file/upload"
+            echo "Dataset ID: ${NEW_ID}"
+            echo "Bearer (redacted): ${DDG_TOKEN:0:6}...${DDG_TOKEN: -4}"
+          } > ddg-debug.txt
+        env:
+          DDG_TOKEN: ${{ secrets.DDG_TOKEN }}
+
+      - name: Publish artifacts (final.json + diagnostics)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ddg-upload-artifacts
           path: |
             final.json
+            create.json
+            list.json
+            preconfig.json
+            preconfig.headers
+            preconfig.body
+            preconfig.curl.log
             upload.json
             upload.headers
             upload.body
             curl_upload_debug.txt
             job.json
+            ddg-debug.txt
           if-no-files-found: ignore
           retention-days: 7
 
       - name: Done
-        run: echo "Upload has been successful"
-
+        run: echo "Upload has been successful ✅ (Dataset ID: ${NEW_ID})"
