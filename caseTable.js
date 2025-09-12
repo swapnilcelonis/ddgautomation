@@ -15,11 +15,11 @@ const xlsx = require('xlsx');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 
-const INPUT_XLSX = 'input3.xlsx';
+const INPUT_XLSX = 'input.xlsx';
 const ENTITIES_FILE = 'entities.json';
 const VARIANTS_FILE = 'variants.json';
 const BACKUP_OUTPUT = 'caseTableOutput_beforeEntityMap.json';
-const OUTPUT_FILE = 'zzz.json';
+const OUTPUT_FILE = 'caseTable.json';
 
 if (!fs.existsSync(INPUT_XLSX)) {
   console.error(`Missing ${INPUT_XLSX} in current folder. Aborting.`);
