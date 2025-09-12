@@ -5,12 +5,12 @@ import fs from "fs";
 let text = fs.readFileSync("output.json", "utf8");
 
 // ---------- Step 2: Replace exact words with word+1 ----------
-const words = ["Customer", "Material", "Organization", "NetValue", "SignalLink", "Region"];
+// const words = ["Customer", "Material", "Organization", "NetValue", "SignalLink", "Region"];
 
-for (const word of words) {
-  const regex = new RegExp(`\\b${word}\\b`, "gi"); // exact word, ignore case
-  text = text.replace(regex, (match) => match + "1");
-}
+// for (const word of words) {
+//   const regex = new RegExp(`\\b${word}\\b`, "gi"); // exact word, ignore case
+//   text = text.replace(regex, (match) => match + "1");
+// }
 
 // ---------- Step 3: Parse JSON and clear targetObjects ----------
 let data;
@@ -22,21 +22,21 @@ try {
 }
 
 // Recursive function to walk through all objects/arrays
-function clearTargetObjects(obj) {
-  if (Array.isArray(obj)) {
-    obj.forEach(clearTargetObjects);
-  } else if (obj && typeof obj === "object") {
-    for (const key of Object.keys(obj)) {
-      if (key === "targetObjects" && Array.isArray(obj[key])) {
-        obj[key] = []; // <-- clear the array
-      } else {
-        clearTargetObjects(obj[key]);
-      }
-    }
-  }
-}
+// function clearTargetObjects(obj) {
+//   if (Array.isArray(obj)) {
+//     obj.forEach(clearTargetObjects);
+//   } else if (obj && typeof obj === "object") {
+//     for (const key of Object.keys(obj)) {
+//       if (key === "targetObjects" && Array.isArray(obj[key])) {
+//         obj[key] = []; // <-- clear the array
+//       } else {
+//         clearTargetObjects(obj[key]);
+//       }
+//     }
+//   }
+// }
 
-clearTargetObjects(data);
+// clearTargetObjects(data);
 
 // ---------- Step 4: Save to output ----------
 fs.writeFileSync("final.json", JSON.stringify(data, null, 2), "utf8");
