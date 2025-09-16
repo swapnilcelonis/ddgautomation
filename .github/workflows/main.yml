@@ -48,6 +48,12 @@ on:
           e.g. https://docs.google.com/spreadsheets/d/<FILE_ID>/edit#gid=0
         required: true
         type: string
+      ddg_token:
+        description: >
+          API Token.
+          e.g. API Token
+        required: true
+        type: string
       allow_host:
         description: "Safety: only allow API domain hosts ending with this suffix"
         required: false
@@ -59,7 +65,7 @@ permissions:
 
 jobs:
   ddg:
-    environment: ${{ inputs.environment }}  # exposes secrets.DDG_TOKEN from that environment
+    environment: ${{ inputs.environment }}  # exposes inputs.ddg_token from that environment
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -120,7 +126,7 @@ jobs:
         id: create
         env:
           DOMAIN:   ${{ inputs.domain }}
-          TOKEN:    ${{ secrets.DDG_TOKEN }}
+          TOKEN:    ${{ inputs.ddg_token }}
           DDGNAME:  ${{ inputs.ddgname }}
           DATA_POOL:  ${{ inputs.ddgdatapool }}
           DATA_MODEL: ${{ inputs.ddgdatamodel }}
@@ -211,7 +217,7 @@ jobs:
         id: precheck_config
         env:
           DOMAIN: ${{ inputs.domain }}
-          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          TOKEN:  ${{ inputs.ddg_token }}
           ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
@@ -273,7 +279,7 @@ jobs:
         id: upload
         env:
           DOMAIN: ${{ inputs.domain }}
-          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          TOKEN:  ${{ inputs.ddg_token }}
           ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
@@ -328,7 +334,7 @@ jobs:
       - name: Trigger data job (API #3)
         env:
           DOMAIN: ${{ inputs.domain }}
-          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          TOKEN:  ${{ inputs.ddg_token }}
           ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
@@ -372,7 +378,7 @@ jobs:
             echo "Bearer (redacted): ${DDG_TOKEN:0:6}...${DDG_TOKEN: -4}"
           } > ddg-debug.txt
         env:
-          DDG_TOKEN: ${{ secrets.DDG_TOKEN }}
+          DDG_TOKEN: ${{ inputs.ddg_token }}
 
       - name: Publish artifacts (final.json + diagnostics)
         if: always()
