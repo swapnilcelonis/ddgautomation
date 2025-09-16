@@ -37,11 +37,6 @@ on:
         required: true
         type: string
         default: "defaultPackage"
-      analysis:
-        description: "Analysis"
-        required: true
-        type: string
-        default: "defaultAnalysis"
       google_sheets_link:
         description: >
           Public Google Sheets link (set sharing to 'Anyone with the link').
