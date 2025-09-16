@@ -65,11 +65,11 @@ permissions:
 
 jobs:
   ddg:
-    environment: ${{ inputs.environment }}  # exposes inputs.ddg_token from that environment
+    environment: ${{ inputs.ddg_token }}  # exposes inputs.ddg_token from that environment
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: ddg-${{ inputs.environment }}
+      group: ddg-${{ inputs.ddg_token }}
       cancel-in-progress: false
 
     steps:
