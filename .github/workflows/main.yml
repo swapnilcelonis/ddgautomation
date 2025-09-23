@@ -27,25 +27,16 @@ on:
         required: true
         type: string
         default: "default"
-      space:
-        description: "Space"
-        required: true
-        type: string
-        default: "defaultSpace"
-      genpackage:
-        description: "Gen Package"
-        required: true
-        type: string
-        default: "defaultPackage"
-      analysis:
-        description: "Analysis"
-        required: true
-        type: string
-        default: "defaultAnalysis"
       google_sheets_link:
         description: >
           Public Google Sheets link (set sharing to 'Anyone with the link').
           e.g. https://docs.google.com/spreadsheets/d/<FILE_ID>/edit#gid=0
+        required: true
+        type: string
+      ddg_token:
+        description: >
+          API Token.
+          e.g. API Token
         required: true
         type: string
       allow_host:
@@ -59,11 +50,11 @@ permissions:
 
 jobs:
   ddg:
-    environment: ${{ inputs.environment }}  # exposes secrets.DDG_TOKEN from that environment
+    environment: ${{ inputs.ddg_token }}  # exposes inputs.ddg_token from that environment
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: ddg-${{ inputs.environment }}
+      group: ddg-${{ inputs.ddg_token }}
       cancel-in-progress: false
 
     steps:
@@ -120,7 +111,7 @@ jobs:
         id: create
         env:
           DOMAIN:   ${{ inputs.domain }}
-          TOKEN:    ${{ secrets.DDG_TOKEN }}
+          TOKEN:    ${{ inputs.ddg_token }}
           DDGNAME:  ${{ inputs.ddgname }}
           DATA_POOL:  ${{ inputs.ddgdatapool }}
           DATA_MODEL: ${{ inputs.ddgdatamodel }}
@@ -154,7 +145,7 @@ jobs:
             --arg sp "$SPACE" \
             --arg gp "$GENPACKAGE" \
             --arg an "$ANALYSIS" \
-            '{name:$name, ddgType:"OBJECT_CENTRIC", params:{dataPool:$dp, dataModel:$dm, space:$sp, genpackage:$gp, analysis:$an}}')
+            '{name:$name, ddgType:"OBJECT_CENTRIC", params:{dataPool:$dp, dataModel:$dm}}')
 
           RES=$(curl -sS -w '\n%{http_code}' -X POST "$DOMAIN/demo-data-generator/api/demo-data-set" \
             -H "accept: application/json" \
@@ -211,7 +202,7 @@ jobs:
         id: precheck_config
         env:
           DOMAIN: ${{ inputs.domain }}
-          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          TOKEN:  ${{ inputs.ddg_token }}
           ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
@@ -273,7 +264,7 @@ jobs:
         id: upload
         env:
           DOMAIN: ${{ inputs.domain }}
-          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          TOKEN:  ${{ inputs.ddg_token }}
           ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
@@ -328,7 +319,7 @@ jobs:
       - name: Trigger data job (API #3)
         env:
           DOMAIN: ${{ inputs.domain }}
-          TOKEN:  ${{ secrets.DDG_TOKEN }}
+          TOKEN:  ${{ inputs.ddg_token }}
           ID:     ${{ env.NEW_ID }}
         shell: bash
         run: |
@@ -372,7 +363,7 @@ jobs:
             echo "Bearer (redacted): ${DDG_TOKEN:0:6}...${DDG_TOKEN: -4}"
           } > ddg-debug.txt
         env:
-          DDG_TOKEN: ${{ secrets.DDG_TOKEN }}
+          DDG_TOKEN: ${{ inputs.ddg_token }}
 
       - name: Publish artifacts (final.json + diagnostics)
         if: always()
