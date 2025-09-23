@@ -27,16 +27,6 @@ on:
         required: true
         type: string
         default: "default"
-      space:
-        description: "Space"
-        required: true
-        type: string
-        default: "defaultSpace"
-      genpackage:
-        description: "Gen Package"
-        required: true
-        type: string
-        default: "defaultPackage"
       google_sheets_link:
         description: >
           Public Google Sheets link (set sharing to 'Anyone with the link').
@@ -155,7 +145,7 @@ jobs:
             --arg sp "$SPACE" \
             --arg gp "$GENPACKAGE" \
             --arg an "$ANALYSIS" \
-            '{name:$name, ddgType:"OBJECT_CENTRIC", params:{dataPool:$dp, dataModel:$dm, space:$sp, genpackage:$gp, analysis:$an}}')
+            '{name:$name, ddgType:"OBJECT_CENTRIC", params:{dataPool:$dp, dataModel:$dm}}')
 
           RES=$(curl -sS -w '\n%{http_code}' -X POST "$DOMAIN/demo-data-generator/api/demo-data-set" \
             -H "accept: application/json" \
