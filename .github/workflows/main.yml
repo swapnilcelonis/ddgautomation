@@ -181,7 +181,7 @@ jobs:
           echo "NEW_ID=$NEW" >> $GITHUB_ENV
 
       # === Run these 3 steps AFTER resolve/create ===
-      - name: Run ddgjsoncreator.js → output.json
+      - name: Run ddgjsoncreator.js → final.json
         run: |
           echo "DEBUG Dataset ID for scripts: ${NEW_ID}"
           node ddgjsoncreator.js \
@@ -194,12 +194,12 @@ jobs:
             --eventObjects eventObjects.json \
             --objectObjects objectObjects.json \
             --attributeObjects attributeObjects.json \
-            --out output.json
+            --out final.json
 
-      - name: Run changer.js (produces final.json at root)
-        run: |
-          echo "DEBUG changer.js using dataset ID: ${NEW_ID}"
-          node changer.js
+      # - name: Run changer.js (produces final.json at root)
+      #   run: |
+      #     echo "DEBUG changer.js using dataset ID: ${NEW_ID}"
+      #     node changer.js
 
       - name: Verify final.json exists
         run: |
