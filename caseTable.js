@@ -4,7 +4,7 @@
 //   node buildCaseTable_createMissingDimensions.js
 //
 // Expects:
-//   - input3.xlsx
+//   - norvo.xlsx
 //   - entities.json
 //   - variants.json (optional, used for mapping distributionItems.referencedId)
 // Outputs:
@@ -14,6 +14,7 @@
 const xlsx = require('xlsx');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
+const { finished } = require('stream');
 
 const INPUT_XLSX = 'input.xlsx';
 const ENTITIES_FILE = 'entities.json';
@@ -208,6 +209,14 @@ for (const sheetName of sheetNames) {
   });
 }
 
+// selectedDimensions.forEach(obj => {
+//   Object.keys(obj).forEach(key => {
+//     console.log(key, ":", obj[key]);
+//   });
+// });
+
+
+
 // Resolve ATTRIBUTE distributionItems across selectedDimensions
 function findDimensionByCleanName(dims, nameRaw) {
   const target = cleanId(nameRaw);
@@ -363,10 +372,30 @@ for (const sheetName of sheetNames) {
   }
 }
 
-/* ---------- Backup before mapping ---------- */
+// ---------- lightweight safe stringify to avoid huge strings ----------
+function safeStringify(obj, opts = {}) {
+  const { maxArray = 20, sample = 5, space = 2 } = opts;
+  const seen = new WeakSet();
+  return JSON.stringify(obj, function (k, v) {
+    if (v && typeof v === 'object') {
+      if (seen.has(v)) return '[Circular]';
+      seen.add(v);
+    }
+    if (Array.isArray(v)) {
+      if (v.length > maxArray) {
+        return { __type: 'Array', length: v.length, sample: v.slice(0, sample) };
+      }
+    }
+    return v;
+  }, space);
+}
 
+// ---------- Backup before mapping ----------
 const backupObj = { caseTableCreator: { dimensionList: [], selectedDimensions } };
-fs.writeFileSync(BACKUP_OUTPUT, JSON.stringify(backupObj, null, 2), 'utf8');
+// console.log(backupObj);
+
+// write summarized backup to avoid RangeError (adjust maxArray/sample if desired)
+fs.writeFileSync(BACKUP_OUTPUT, safeStringify(backupObj, { maxArray: 50, sample: 10, space: 2 }), 'utf8');
 console.log(`Backup written to ${BACKUP_OUTPUT}`);
 
 /* ---------- Load entities.json and map selectedDimension.referencedId -> entitiesDefinitions.attributes[].id ---------- */
@@ -512,27 +541,86 @@ function sanitizeStringsInObject(obj) {
 
 /* ---------- Final write (sanitize then write) ---------- */
 
-const finalObj = {
-  caseTableCreator: {
-    dimensionList,
-    selectedDimensions
-  }
-};
+function writeSanitizedJsonStream(outputPath, dimensionListArr, selectedDimensionsArr) {
+  return new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(outputPath, { encoding: 'utf8' });
+    ws.on('error', reject);
 
-// sanitize copy of finalObj
-const sanitizedFinalObj = sanitizeStringsInObject(finalObj);
+    try {
+      ws.write('{"caseTableCreator":{');
 
-fs.writeFileSync(OUTPUT_FILE, JSON.stringify(sanitizedFinalObj, null, 2), 'utf8');
+      // dimensionList
+      ws.write('"dimensionList":[');
+      for (let i = 0; i < dimensionListArr.length; i++) {
+        const sanitized = sanitizeStringsInObject(dimensionListArr[i]);
+        ws.write(JSON.stringify(sanitized));
+        if (i < dimensionListArr.length - 1) ws.write(',');
+      }
+      ws.write('],');
 
-console.log(`Wrote ${OUTPUT_FILE}.`);
-console.log(`Mapped ${mappedCount} selectedDimensions.referencedId -> entities attribute ids.`);
-console.log(`Added ${dimensionList.length} missing attribute(s) from entities.json into dimensionList.`);
-console.log(`Mapped ${variantMappedCount} distributionItems.referencedId -> variant group ids.`);
-if (unresolved.size > 0) {
-  console.log(`Warning: ${unresolved.size} selectedDimensions.referencedId values were not found in entities.json attributes (left as original).`);
-  Array.from(unresolved).slice(0, 50).forEach(u => console.log('  -', u));
+      // selectedDimensions
+      ws.write('"selectedDimensions":[');
+      for (let i = 0; i < selectedDimensionsArr.length; i++) {
+        const sanitized = sanitizeStringsInObject(selectedDimensionsArr[i]);
+        ws.write(JSON.stringify(sanitized));
+        if (i < selectedDimensionsArr.length - 1) ws.write(',');
+      }
+      ws.write(']}}');
+
+      ws.end();
+    } catch (err) {
+      ws.destroy();
+      return reject(err);
+    }
+
+    finished(ws, (err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
 }
-if (variantUnresolved.size > 0) {
-  console.log(`Warning: ${variantUnresolved.size} distributionItems.referencedId values were not found in ${VARIANTS_FILE} (left as original). Examples:`);
-  Array.from(variantUnresolved).slice(0, 30).forEach(u => console.log('  -', u));
-}
+
+writeSanitizedJsonStream(OUTPUT_FILE, dimensionList, selectedDimensions)
+  .then(() => {
+    console.log(`Wrote ${OUTPUT_FILE}.`);
+    console.log(`Mapped ${mappedCount} selectedDimensions.referencedId -> entities attribute ids.`);
+    console.log(`Added ${dimensionList.length} missing attribute(s) from entities.json into dimensionList.`);
+    console.log(`Mapped ${variantMappedCount} distributionItems.referencedId -> variant group ids.`);
+    if (unresolved.size > 0) {
+      console.log(`Warning: ${unresolved.size} selectedDimensions.referencedId values were not found in entities.json attributes (left as original).`);
+      Array.from(unresolved).slice(0, 50).forEach(u => console.log('  -', u));
+    }
+    if (variantUnresolved.size > 0) {
+      console.log(`Warning: ${variantUnresolved.size} distributionItems.referencedId values were not found in ${VARIANTS_FILE} (left as original). Examples:`);
+      Array.from(variantUnresolved).slice(0, 30).forEach(u => console.log('  -', u));
+    }
+  })
+  .catch(err => {
+    console.error(`Failed writing ${OUTPUT_FILE}: ${err.message || err}`);
+    console.error('If this still fails it may be due to an extremely large single item; consider writing NDJSON or splitting per-dimension files.');
+  });
+
+// const finalObj = {
+//   caseTableCreator: {
+//     dimensionList,
+//     selectedDimensions
+//   }
+// };
+
+// // sanitize copy of finalObj
+// const sanitizedFinalObj = sanitizeStringsInObject(finalObj);
+
+// fs.writeFileSync(OUTPUT_FILE, JSON.stringify(sanitizedFinalObj, null, 2), 'utf8');
+
+// console.log(`Wrote ${OUTPUT_FILE}.`);
+// console.log(`Mapped ${mappedCount} selectedDimensions.referencedId -> entities attribute ids.`);
+// console.log(`Added ${dimensionList.length} missing attribute(s) from entities.json into dimensionList.`);
+// console.log(`Mapped ${variantMappedCount} distributionItems.referencedId -> variant group ids.`);
+// if (unresolved.size > 0) {
+//   console.log(`Warning: ${unresolved.size} selectedDimensions.referencedId values were not found in entities.json attributes (left as original).`);
+//   Array.from(unresolved).slice(0, 50).forEach(u => console.log('  -', u));
+// }
+// if (variantUnresolved.size > 0) {
+//   console.log(`Warning: ${variantUnresolved.size} distributionItems.referencedId values were not found in ${VARIANTS_FILE} (left as original). Examples:`);
+//   Array.from(variantUnresolved).slice(0, 30).forEach(u => console.log('  -', u));
+// }
